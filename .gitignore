@@ -1,0 +1,15 @@
+# Build artifacts
+rdprun
+rdprun.exe
+rdprun-linux-amd64
+
+# Debug screenshots
+shot_*.png
+
+# IDE
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
