@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bytes"
+	_ "embed"
 	"encoding/binary"
 	"image"
 	"image/color"
+	_ "image/jpeg"
 	"image/png"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -17,13 +21,88 @@ import (
 // buffer and computes a mean-brightness metric used to detect the UAC secure
 // desktop (which dims the whole screen to ~40% brightness).
 type bitmapAccumulator struct {
-	mu     sync.Mutex
+	mu       sync.Mutex
+	width    int
+	height   int
+	bpp      int
+	frame    []byte // top-down BGRX, width*height*4 (approximate composite)
+	has      bool
+	revision uint64
+}
+
+type frameStats struct {
+	brightness float64
+	blue       float64
+	variance   float64
+	coverage   float64
+	regions    [9]float64
+	revision   uint64
+}
+
+const (
+	uacTemplateWidth  = 32
+	uacTemplateHeight = 24
+	uacTemplateScore  = 0.72
+)
+
+type uacTemplate struct {
+	pixels [uacTemplateWidth * uacTemplateHeight]float64
 	width  int
 	height int
-	bpp    int
-	frame  []byte // top-down BGRX, width*height*4 (approximate composite)
-	last   float64
-	has    bool
+}
+
+//go:embed uac-reference.png
+var defaultUACTemplatePNG []byte
+
+func loadUACTemplate(path string) (*uacTemplate, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return decodeUACTemplate(data)
+}
+
+func loadDefaultUACTemplate() (*uacTemplate, error) {
+	return decodeUACTemplate(defaultUACTemplatePNG)
+}
+
+func decodeUACTemplate(data []byte) (*uacTemplate, error) {
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	template := &uacTemplate{width: img.Bounds().Dx(), height: img.Bounds().Dy()}
+	for y := 0; y < uacTemplateHeight; y++ {
+		for x := 0; x < uacTemplateWidth; x++ {
+			sourceX := img.Bounds().Min.X + x*img.Bounds().Dx()/uacTemplateWidth
+			sourceY := img.Bounds().Min.Y + y*img.Bounds().Dy()/uacTemplateHeight
+			r, g, b, _ := img.At(sourceX, sourceY).RGBA()
+			template.pixels[y*uacTemplateWidth+x] = (float64(r>>8) + float64(g>>8) + float64(b>>8)) / 3
+		}
+	}
+	normalizeTemplate(&template.pixels)
+	return template, nil
+}
+
+func normalizeTemplate(pixels *[uacTemplateWidth * uacTemplateHeight]float64) {
+	var sum float64
+	for _, value := range pixels {
+		sum += value
+	}
+	mean := sum / float64(len(pixels))
+	var squaredSum float64
+	for index, value := range pixels {
+		value -= mean
+		pixels[index] = value
+		squaredSum += value * value
+	}
+	deviation := math.Sqrt(squaredSum / float64(len(pixels)))
+	if deviation == 0 {
+		return
+	}
+	for index := range pixels {
+		pixels[index] /= deviation
+	}
 }
 
 func newBitmapAccumulator(width, height int) *bitmapAccumulator {
@@ -39,12 +118,17 @@ func newBitmapAccumulator(width, height int) *bitmapAccumulator {
 func (b *bitmapAccumulator) update(rects []pdu.BitmapData) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	updated := false
 	for _, r := range rects {
 		data := r.BitmapDataStream
 		if r.IsCompress() {
 			data = core.Decompress(r.BitmapDataStream, int(r.Width), int(r.Height), bppBytes(r.BitsPerPixel))
 		}
 		b.composite(r, data)
+		updated = updated || len(data) > 0
+	}
+	if updated {
+		b.revision++
 	}
 }
 
@@ -117,54 +201,187 @@ func (b *bitmapAccumulator) composite(r pdu.BitmapData, data []byte) {
 	}
 }
 
-// meanBrightness returns the mean luminance (0..255) over the current frame,
-// sampling pixels for speed. Returns 0 if no frame has been received.
+// meanBrightness returns the mean luminance (0..255) over received pixels in
+// the current frame. Returns 0 if no frame has been received. Unreceived
+// pixels must not affect this metric: bitmap updates can be partial, and their
+// zero-initialized backing pixels would otherwise make the UAC threshold
+// unstable.
 func (b *bitmapAccumulator) meanBrightness() (float64, bool) {
+	stats, ok := b.stats()
+	return stats.brightness, ok
+}
+
+func (b *bitmapAccumulator) stats() (frameStats, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.has || len(b.frame) == 0 {
-		return 0, false
+		return frameStats{}, false
 	}
-	const step = 4096 // sample every ~4KB to keep it cheap
-	var sum, count float64
-	for i := 0; i+2 < len(b.frame); i += step {
-		// BGR order; approximate luminance as average of B,G,R.
-		lum := float64(b.frame[i]) + float64(b.frame[i+1]) + float64(b.frame[i+2])
-		sum += lum / 3
-		count++
+
+	var luminanceSum, luminanceSquaredSum, blueSum float64
+	var count float64
+	var regionSums [9]float64
+	var regionCounts [9]float64
+	for y := 0; y < b.height; y++ {
+		for x := 0; x < b.width; x++ {
+			off := (y*b.width + x) * 4
+			if b.frame[off+3] == 0 {
+				continue
+			}
+			luminance := (float64(b.frame[off]) + float64(b.frame[off+1]) + float64(b.frame[off+2])) / 3
+			region := (y*3/b.height)*3 + x*3/b.width
+			luminanceSum += luminance
+			luminanceSquaredSum += luminance * luminance
+			blueSum += float64(b.frame[off])
+			regionSums[region] += luminance
+			regionCounts[region]++
+			count++
+		}
 	}
 	if count == 0 {
-		return 0, false
+		return frameStats{}, false
 	}
-	return sum / count, true
+
+	stats := frameStats{
+		brightness: luminanceSum / count,
+		blue:       blueSum / count,
+		coverage:   count / float64(b.width*b.height),
+		revision:   b.revision,
+	}
+	stats.variance = luminanceSquaredSum/count - stats.brightness*stats.brightness
+	for region := range stats.regions {
+		if regionCounts[region] > 0 {
+			stats.regions[region] = regionSums[region] / regionCounts[region]
+		}
+	}
+	return stats, true
 }
 
-// watchUAC runs a brightness watcher for up to timeout. If the mean brightness
-// drops to <= dimRatio of the baseline (secure desktop dimming), it calls
-// onConfirm once and returns. Returns whether a dim was detected.
-func (b *bitmapAccumulator) watchUAC(timeout time.Duration, baseline float64, dimRatio float64, onConfirm func()) bool {
-	deadline := time.Now().Add(timeout)
-	if baseline <= 0 {
-		baseline = 128 // default assumption if no baseline measured
+func isUACFrame(baseline, current frameStats) bool {
+	if current.coverage < 0.65 {
+		return false
 	}
-	threshold := baseline * dimRatio
+	brightnessChange := math.Abs(current.brightness - baseline.brightness)
+	blueChange := math.Abs(current.blue - baseline.blue)
+	globalTransition := brightnessChange >= math.Max(20, baseline.brightness*0.35) || blueChange >= 30
+	if !globalTransition {
+		return false
+	}
+	changedRegions := 0
+	for region := range current.regions {
+		if math.Abs(current.regions[region]-baseline.regions[region]) >= 15 {
+			changedRegions++
+		}
+	}
+	if changedRegions < 6 {
+		return false
+	}
+
+	center := current.regions[4]
+	var edgeSum float64
+	for _, region := range [...]int{0, 1, 2, 3, 5, 6, 7, 8} {
+		edgeSum += current.regions[region]
+	}
+	edgeMean := edgeSum / 8
+	return center >= edgeMean+18 && center >= current.brightness+12 && current.variance >= 250
+}
+
+func (b *bitmapAccumulator) templateSimilarity(template *uacTemplate) (float64, bool) {
+	if template == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.has {
+		return 0, false
+	}
+	width := template.width * b.width / 1024
+	height := template.height * b.height / 768
+	if width <= 0 || height <= 0 || width > b.width || height > b.height {
+		return 0, false
+	}
+	centerX := (b.width - width) / 2
+	centerY := (b.height - height) / 2
+	searchStep := max(1, b.width/128)
+	searchRange := 6 * searchStep
+	bestSimilarity := 0.0
+	found := false
+	for offsetY := -searchRange; offsetY <= searchRange; offsetY += searchStep {
+		for offsetX := -searchRange; offsetX <= searchRange; offsetX += searchStep {
+			similarity, ok := b.templateSimilarityAt(template, centerX+offsetX, centerY+offsetY, width, height)
+			if ok && (!found || similarity > bestSimilarity) {
+				bestSimilarity = similarity
+				found = true
+			}
+		}
+	}
+	return bestSimilarity, found
+}
+
+func (b *bitmapAccumulator) templateSimilarityAt(template *uacTemplate, originX, originY, width, height int) (float64, bool) {
+	if originX < 0 || originY < 0 || originX+width > b.width || originY+height > b.height {
+		return 0, false
+	}
+	var candidate [uacTemplateWidth * uacTemplateHeight]float64
+	for y := 0; y < uacTemplateHeight; y++ {
+		for x := 0; x < uacTemplateWidth; x++ {
+			sourceX := originX + x*width/uacTemplateWidth
+			sourceY := originY + y*height/uacTemplateHeight
+			off := (sourceY*b.width + sourceX) * 4
+			if b.frame[off+3] == 0 {
+				return 0, false
+			}
+			candidate[y*uacTemplateWidth+x] = (float64(b.frame[off]) + float64(b.frame[off+1]) + float64(b.frame[off+2])) / 3
+		}
+	}
+	normalizeTemplate(&candidate)
+	var correlation float64
+	for index, value := range candidate {
+		correlation += value * template.pixels[index]
+	}
+	return (correlation/float64(len(candidate)) + 1) / 2, true
+}
+
+// watchUAC runs a frame-based watcher for up to timeout. It recognizes a UAC
+// prompt only after a global screen transition and a centered modal-dialog
+// signature persist across two distinct bitmap updates.
+func (b *bitmapAccumulator) watchUAC(timeout time.Duration, baseline frameStats, template *uacTemplate, onSample func(float64), onConfirm func(float64)) (bool, float64) {
+	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
+	matchingFrames := 0
+	lastRevision := baseline.revision
 	for {
 		select {
 		case <-ticker.C:
-			cur, ok := b.meanBrightness()
-			if !ok {
+			current, ok := b.stats()
+			if !ok || current.revision == lastRevision {
 				continue
 			}
-			if cur <= threshold && cur > 0 {
-				if onConfirm != nil {
-					onConfirm()
+			lastRevision = current.revision
+			similarity := 0.0
+			matches := isUACFrame(baseline, current)
+			if template != nil {
+				var ok bool
+				similarity, ok = b.templateSimilarity(template)
+				matches = ok && similarity >= uacTemplateScore
+				if ok && onSample != nil {
+					onSample(similarity)
 				}
-				return true
+			}
+			if matches {
+				matchingFrames++
+			} else {
+				matchingFrames = 0
+			}
+			if matchingFrames >= 2 {
+				if onConfirm != nil {
+					onConfirm(similarity)
+				}
+				return true, similarity
 			}
 		case <-time.After(time.Until(deadline)):
-			return false
+			return false, 0
 		}
 	}
 }

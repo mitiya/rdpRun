@@ -14,7 +14,7 @@ Run a command on a remote Windows host over RDP and optionally capture text outp
 - RDP login with NLA/standard/auto auth modes
 - Keyboard macro flow (Win+R -> launch shell -> run command)
 - Optional output capture via clipboard (`--capture`)
-- Optional UAC auto-confirm (`Alt+Y`) with timeout
+- Visual UAC detection using an embedded, language-independent image reference and one `Alt+Y` fallback after the timeout
 - Cross-build for Windows and Linux (`CGO_ENABLED=0`)
 - Bundled local `third_party/grdp` copy patched for cgo-free builds
 
@@ -58,7 +58,8 @@ rdprun --server srv:3389 --user joe --pass pw --cmd "Get-Process" --shell powers
 - `--shell cmd|powershell` - shell to start
 - `--auth nla|standard|auto` - security negotiation mode
 - `--timeout` - capture timeout
-- `--uac` / `--uac-timeout` - watch for UAC dimming and send Alt+Y
+- `--uac` / `--uac-timeout` - detect a protected-desktop UAC dialog from RDP frames and send `Alt+Y`; if none is confirmed before the timeout, send one fallback `Alt+Y`. Set `--uac-timeout=0` to disable both detection and fallback.
+- `--uac-template path.png` - override the embedded UAC screenshot reference. The comparison is structural and does not read UI text, so it is independent of the Windows language.
 - `--debug` - save diagnostic screenshots
 - `--verbose` - verbose protocol logs
 

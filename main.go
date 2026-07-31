@@ -68,8 +68,15 @@ func main() {
 	s.typeString(launcher, cfg.KeyDelay)
 	time.Sleep(cfg.KeyDelay)
 	s.sendEnter(cfg.KeyDelay)
-	// Give the shell window time to appear.
-	time.Sleep(cfg.StepDelay + cfg.StepDelay)
+	// PowerShell needs noticeably longer than cmd on a fresh Windows machine.
+	// If text starts while its startup profile/banner is still initializing, RDP
+	// Unicode events are accepted only after the prompt is ready and the leading
+	// part of a command is lost. This is especially damaging for https:// URLs.
+	shellReadyDelay := cfg.StepDelay + cfg.StepDelay
+	if cfg.Shell == "powershell" && shellReadyDelay < 3*time.Second {
+		shellReadyDelay = 3 * time.Second
+	}
+	time.Sleep(shellReadyDelay)
 	if cfg.Debug {
 		saveShot(s, "shot_03_after_shell_launch.png")
 	}
@@ -82,13 +89,29 @@ func main() {
 	s.typeString(cmd, cfg.KeyDelay)
 	time.Sleep(cfg.KeyDelay)
 
-	// Measure the UAC brightness baseline BEFORE pressing Enter, while the
-	// desktop is still normal. A UAC prompt can appear almost instantly
-	// after Enter, so measuring after Enter would capture an already-dimmed
-	// frame as the "baseline" and miss the dim.
-	uacBaseline, _ := s.bmp.meanBrightness()
+	// Capture the UAC frame baseline BEFORE pressing Enter. A UAC prompt can
+	// appear almost instantly after Enter, so a later baseline could already
+	// contain the protected desktop.
+	uacBaseline, _ := s.bmp.stats()
+	var uacTemplate *uacTemplate
+	if cfg.UAC {
+		var err error
+		if cfg.UACTemplate == "" {
+			uacTemplate, err = loadDefaultUACTemplate()
+		} else {
+			uacTemplate, err = loadUACTemplate(cfg.UACTemplate)
+		}
+		if err != nil {
+			if cfg.UACTemplate == "" {
+				fmt.Fprintf(os.Stderr, "cannot load embedded UAC template: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "cannot load UAC template %q: %v\n", cfg.UACTemplate, err)
+			}
+			os.Exit(2)
+		}
+	}
 	if cfg.Debug && cfg.UAC {
-		fmt.Fprintf(os.Stderr, "uac baseline (pre-Enter) brightness=%.0f\n", uacBaseline)
+		fmt.Fprintf(os.Stderr, "uac baseline (pre-Enter) brightness=%.0f coverage=%.0f%%\n", uacBaseline.brightness, uacBaseline.coverage*100)
 	}
 
 	s.sendEnter(cfg.KeyDelay)
@@ -96,16 +119,26 @@ func main() {
 		saveShot(s, "shot_04_after_command_enter.png")
 	}
 
-	// 4. UAC handling: watch the screen for dimming (secure desktop) and send
-	// Alt+Y to confirm, up to the UAC timeout. Skip entirely if --uac-timeout=0.
+	// 4. UAC handling: watch for a protected-desktop transition and centered
+	// UAC dialog, then send Alt+Y. Skip entirely if --uac-timeout=0.
 	if cfg.UAC && cfg.UACTimeout > 0 {
 		if cfg.Debug {
-			fmt.Fprintf(os.Stderr, "watching for UAC prompt (baseline brightness=%.0f, timeout=%s)...\n", uacBaseline, cfg.UACTimeout)
+			fmt.Fprintf(os.Stderr, "watching for UAC prompt (baseline brightness=%.0f, timeout=%s)...\n", uacBaseline.brightness, cfg.UACTimeout)
 		}
-		confirmed := s.bmp.watchUAC(cfg.UACTimeout, uacBaseline, 0.8, func() {
-			fmt.Fprintln(os.Stderr, "UAC prompt detected; sending Alt+Y")
+		var onSample func(float64)
+		if cfg.Debug && uacTemplate != nil {
+			onSample = func(similarity float64) {
+				fmt.Fprintf(os.Stderr, "  UAC template similarity=%.0f%%\n", similarity*100)
+			}
+		}
+		confirmed, _ := s.bmp.watchUAC(cfg.UACTimeout, uacBaseline, uacTemplate, onSample, func(similarity float64) {
 			if cfg.Debug {
-				saveShot(s, "shot_uac_detected.png")
+				saveShot(s, "shot_uac_before_alt_y.png")
+			}
+			if uacTemplate != nil {
+				fmt.Fprintf(os.Stderr, "UAC prompt detected (template similarity=%.0f%%); sending Alt+Y\n", similarity*100)
+			} else {
+				fmt.Fprintln(os.Stderr, "UAC prompt detected; sending Alt+Y")
 			}
 			s.sendAltY(cfg.KeyDelay)
 		})
@@ -115,8 +148,13 @@ func main() {
 			if cfg.Debug {
 				saveShot(s, "shot_06_after_uac_confirm.png")
 			}
-		} else if cfg.Debug {
-			fmt.Fprintln(os.Stderr, "no UAC prompt detected; continuing")
+		} else {
+			if cfg.Debug {
+				fmt.Fprintln(os.Stderr, "no UAC prompt detected; sending one fallback Alt+Y")
+				saveShot(s, "shot_uac_before_alt_y.png")
+			}
+			time.Sleep(300 * time.Millisecond)
+			s.sendAltY(cfg.KeyDelay)
 		}
 	}
 

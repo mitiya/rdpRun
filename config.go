@@ -10,23 +10,24 @@ import (
 
 // Config holds parsed command-line options for rdpRun.
 type Config struct {
-	Server     string // host:port
-	User       string // login (DOMAIN\user or user)
-	Password   string
-	Command    string // shell command to execute on the remote machine
-	Shell      string // "cmd" or "powershell"
-	Capture    bool   // capture command output via clipboard
-	RawCmd     bool   // do not auto-wrap command in "| clip" / "| Set-Clipboard"
-	Timeout    time.Duration
-	Auth       string // "nla" | "standard" | "auto"
-	Width      int
-	Height     int
-	KeyDelay   time.Duration // delay between keypresses
-	StepDelay  time.Duration // delay between macro steps (Win+R, type, enter...)
-	UAC        bool          // auto-confirm UAC via Alt+Y
-	UACTimeout time.Duration
-	Verbose    bool
-	Debug      bool // save diagnostic screenshots + extra state output
+	Server      string // host:port
+	User        string // login (DOMAIN\user or user)
+	Password    string
+	Command     string // shell command to execute on the remote machine
+	Shell       string // "cmd" or "powershell"
+	Capture     bool   // capture command output via clipboard
+	RawCmd      bool   // do not auto-wrap command in "| clip" / "| Set-Clipboard"
+	Timeout     time.Duration
+	Auth        string // "nla" | "standard" | "auto"
+	Width       int
+	Height      int
+	KeyDelay    time.Duration // delay between keypresses
+	StepDelay   time.Duration // delay between macro steps (Win+R, type, enter...)
+	UAC         bool          // auto-confirm UAC via Alt+Y
+	UACTimeout  time.Duration
+	UACTemplate string
+	Verbose     bool
+	Debug       bool // save diagnostic screenshots + extra state output
 }
 
 func parseArgs(args []string) (*Config, error) {
@@ -53,8 +54,9 @@ func parseArgs(args []string) (*Config, error) {
 	fs.IntVar(&cfg.Height, "height", 768, "desktop height")
 	fs.DurationVar(&cfg.KeyDelay, "key-delay", 40*time.Millisecond, "delay between individual keypresses")
 	fs.DurationVar(&cfg.StepDelay, "step-delay", 700*time.Millisecond, "delay between macro steps")
-	fs.BoolVar(&cfg.UAC, "uac", true, "auto-confirm UAC/elevation prompts via Alt+Y")
-	fs.DurationVar(&cfg.UACTimeout, "uac-timeout", 5*time.Second, "how long to watch for a UAC prompt after a command (set 0 to skip)")
+	fs.BoolVar(&cfg.UAC, "uac", true, "detect and confirm UAC/elevation prompts via Alt+Y")
+	fs.DurationVar(&cfg.UACTimeout, "uac-timeout", 5*time.Second, "how long to detect UAC before one fallback Alt+Y (set 0 to skip both)")
+	fs.StringVar(&cfg.UACTemplate, "uac-template", "", "override the embedded PNG reference for visual UAC matching")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "enable verbose RDP library logging")
 	fs.BoolVar(&cfg.Debug, "debug", false, "save diagnostic screenshots (shot_NN_*.png) and print extra state")
 
@@ -165,7 +167,23 @@ Options:
 func reorderFlags(args []string) []string {
 	var flags, positional []string
 	afterDoubleDash := false
-	for _, a := range args {
+	flagsWithValues := map[string]bool{
+		"--server":       true,
+		"--user":         true,
+		"--pass":         true,
+		"--cmd":          true,
+		"--shell":        true,
+		"--timeout":      true,
+		"--auth":         true,
+		"--width":        true,
+		"--height":       true,
+		"--key-delay":    true,
+		"--step-delay":   true,
+		"--uac-timeout":  true,
+		"--uac-template": true,
+	}
+	for index := 0; index < len(args); index++ {
+		a := args[index]
 		if afterDoubleDash {
 			positional = append(positional, a)
 			continue
@@ -176,6 +194,10 @@ func reorderFlags(args []string) []string {
 		}
 		if len(a) > 1 && a[0] == '-' {
 			flags = append(flags, a)
+			if flagsWithValues[a] && index+1 < len(args) {
+				index++
+				flags = append(flags, args[index])
+			}
 		} else {
 			positional = append(positional, a)
 		}
