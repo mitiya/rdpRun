@@ -1,9 +1,9 @@
 # rdprun
 
 [![Downloads (Total)](https://img.shields.io/github/downloads/mitiya/rdpRun/total)](https://github.com/mitiya/rdpRun/releases)
-[![Downloads (v0.1.0)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.0/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.0)
-[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.0/rdprun.exe)
-[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.0/rdprun-linux-amd64)
+[![Downloads (v0.1.1)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.1/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.1)
+[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.1/rdprun.exe)
+[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.1/rdprun-linux-amd64)
 
 Run a command on a remote Windows host over RDP and optionally capture text output through the clipboard channel.
 
