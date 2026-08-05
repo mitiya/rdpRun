@@ -1,9 +1,9 @@
 # rdprun
 
 [![Downloads (Total)](https://img.shields.io/github/downloads/mitiya/rdpRun/total)](https://github.com/mitiya/rdpRun/releases)
-[![Downloads (v0.1.1)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.1/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.1)
-[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.1/rdprun.exe)
-[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.1/rdprun-linux-amd64)
+[![Downloads (v0.1.2)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.2/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.2)
+[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.2/rdprun.exe)
+[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.2/rdprun-linux-amd64)
 
 Run a command on a remote Windows host over RDP and optionally capture text output through the clipboard channel.
 
@@ -15,6 +15,7 @@ Run a command on a remote Windows host over RDP and optionally capture text outp
 - Keyboard macro flow (Win+R -> launch shell -> run command)
 - Optional output capture via clipboard (`--capture`)
 - Visual UAC detection using an embedded, language-independent image reference and one `Alt+Y` fallback after the timeout
+- Verified shell launch: uses `Esc`, a best-effort `Win+D`, then checks for the embedded lower-left Run dialog before typing
 - Cross-build for Windows and Linux (`CGO_ENABLED=0`)
 - Bundled local `third_party/grdp` copy patched for cgo-free builds
 
@@ -60,6 +61,8 @@ rdprun --server srv:3389 --user joe --pass pw --cmd "Get-Process" --shell powers
 - `--timeout` - capture timeout
 - `--uac` / `--uac-timeout` - detect a protected-desktop UAC dialog from RDP frames and send `Alt+Y`; if none is confirmed before the timeout, send one fallback `Alt+Y`. Set `--uac-timeout=0` to disable both detection and fallback.
 - `--uac-template path.png` - override the embedded UAC screenshot reference. The comparison is structural and does not read UI text, so it is independent of the Windows language.
+- `--launch-timeout` - how long to wait for Run dialog verification on each launch attempt (default: `3s`)
+- `--launch-retries` - additional Run dialog launch attempts after the first (default: `2`). If all attempts fail, `rdprun` stops before entering the shell or command into an unknown window.
 - `--debug` - save diagnostic screenshots
 - `--verbose` - verbose protocol logs
 

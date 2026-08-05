@@ -13,6 +13,7 @@ import (
 // modifier keys (Win, Alt) and control keys (Enter, Esc, Backspace).
 const (
 	scRWin      = 0x5B // Left Win key (extended)
+	scD         = 0x20 // 'D' (used with Win to show the desktop)
 	scR         = 0x13 // 'R' (used with Win for the Win+R shell hotkey)
 	scReturn    = 0x1C // Enter
 	scLAlt      = 0x38 // Left Alt
@@ -26,6 +27,17 @@ func (s *rdpSession) sendWinR(keyDelay time.Duration) {
 	s.keyDown(scRWin, true)
 	time.Sleep(keyDelay)
 	s.keyPress(scR, false, keyDelay)
+	s.keyUp(scRWin, true)
+	time.Sleep(keyDelay)
+}
+
+// sendWinD presses and releases Win+D to show the desktop. Unlike Win+M, it
+// works when another application refuses to minimize. Its result is only a
+// best-effort preflight; callers must still verify the following UI state.
+func (s *rdpSession) sendWinD(keyDelay time.Duration) {
+	s.keyDown(scRWin, true)
+	time.Sleep(keyDelay)
+	s.keyPress(scD, false, keyDelay)
 	s.keyUp(scRWin, true)
 	time.Sleep(keyDelay)
 }

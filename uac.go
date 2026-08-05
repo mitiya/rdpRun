@@ -43,6 +43,7 @@ const (
 	uacTemplateWidth  = 32
 	uacTemplateHeight = 24
 	uacTemplateScore  = 0.72
+	runTemplateScore  = 0.78
 )
 
 type uacTemplate struct {
@@ -54,6 +55,9 @@ type uacTemplate struct {
 //go:embed uac-reference.png
 var defaultUACTemplatePNG []byte
 
+//go:embed run-dialog-reference.png
+var defaultRunDialogTemplatePNG []byte
+
 func loadUACTemplate(path string) (*uacTemplate, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -64,6 +68,10 @@ func loadUACTemplate(path string) (*uacTemplate, error) {
 
 func loadDefaultUACTemplate() (*uacTemplate, error) {
 	return decodeUACTemplate(defaultUACTemplatePNG)
+}
+
+func loadDefaultRunDialogTemplate() (*uacTemplate, error) {
+	return decodeUACTemplate(defaultRunDialogTemplatePNG)
 }
 
 func decodeUACTemplate(data []byte) (*uacTemplate, error) {
@@ -297,18 +305,37 @@ func (b *bitmapAccumulator) templateSimilarity(template *uacTemplate) (float64, 
 	}
 	width := template.width * b.width / 1024
 	height := template.height * b.height / 768
+	centerX := (b.width - width) / 2
+	centerY := (b.height - height) / 2
+	return b.templateSimilarityNear(template, centerX, centerY, width, height, 6*max(1, b.width/128))
+}
+
+func (b *bitmapAccumulator) runDialogSimilarity(template *uacTemplate) (float64, bool) {
+	if template == nil {
+		return 0, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.has {
+		return 0, false
+	}
+	width := template.width * b.width / 1024
+	height := template.height * b.height / 768
+	originX := 15 * b.width / 1024
+	originY := 509 * b.height / 768
+	return b.templateSimilarityNear(template, originX, originY, width, height, 4*max(1, b.width/128))
+}
+
+func (b *bitmapAccumulator) templateSimilarityNear(template *uacTemplate, originX, originY, width, height, searchRange int) (float64, bool) {
 	if width <= 0 || height <= 0 || width > b.width || height > b.height {
 		return 0, false
 	}
-	centerX := (b.width - width) / 2
-	centerY := (b.height - height) / 2
 	searchStep := max(1, b.width/128)
-	searchRange := 6 * searchStep
 	bestSimilarity := 0.0
 	found := false
 	for offsetY := -searchRange; offsetY <= searchRange; offsetY += searchStep {
 		for offsetX := -searchRange; offsetX <= searchRange; offsetX += searchStep {
-			similarity, ok := b.templateSimilarityAt(template, centerX+offsetX, centerY+offsetY, width, height)
+			similarity, ok := b.templateSimilarityAt(template, originX+offsetX, originY+offsetY, width, height)
 			if ok && (!found || similarity > bestSimilarity) {
 				bestSimilarity = similarity
 				found = true
@@ -378,6 +405,42 @@ func (b *bitmapAccumulator) watchUAC(timeout time.Duration, baseline frameStats,
 				if onConfirm != nil {
 					onConfirm(similarity)
 				}
+				return true, similarity
+			}
+		case <-time.After(time.Until(deadline)):
+			return false, 0
+		}
+	}
+}
+
+func (b *bitmapAccumulator) watchRunDialog(timeout time.Duration, template *uacTemplate, onSample func(float64)) (bool, float64) {
+	baseline, ok := b.stats()
+	if !ok {
+		return false, 0
+	}
+	deadline := time.Now().Add(timeout)
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	matchingFrames := 0
+	lastRevision := baseline.revision
+	for {
+		select {
+		case <-ticker.C:
+			current, ok := b.stats()
+			if !ok || current.revision == lastRevision {
+				continue
+			}
+			lastRevision = current.revision
+			similarity, matches := b.runDialogSimilarity(template)
+			if onSample != nil {
+				onSample(similarity)
+			}
+			if matches && similarity >= runTemplateScore {
+				matchingFrames++
+			} else {
+				matchingFrames = 0
+			}
+			if matchingFrames >= 2 {
 				return true, similarity
 			}
 		case <-time.After(time.Until(deadline)):

@@ -48,20 +48,60 @@ func main() {
 	defer s.Close()
 	fmt.Fprintln(os.Stderr, "connected; session ready")
 
-	// Small grace period for the desktop to settle after login.
+	// Bring ordinary windows out of the way before opening Run. Win+D can be a
+	// toggle, so the resulting brightness is diagnostic only; Run must later be
+	// positively identified before we type into it.
 	time.Sleep(cfg.StepDelay)
+	beforeDesktop, _ := s.bmp.stats()
 	if cfg.Debug {
-		saveShot(s, "shot_01_desktop.png")
+		saveShot(s, "shot_00_before_desktop_preflight.png")
+	}
+	s.sendEscape(cfg.KeyDelay)
+	s.sendWinD(cfg.KeyDelay)
+	time.Sleep(cfg.StepDelay)
+	afterDesktop, _ := s.bmp.stats()
+	if cfg.Debug {
+		saveShot(s, "shot_01_after_desktop_preflight.png")
+		fmt.Fprintf(os.Stderr, "desktop preflight brightness=%.0f -> %.0f coverage=%.0f%%\n", beforeDesktop.brightness, afterDesktop.brightness, afterDesktop.coverage*100)
 	}
 
-	// 2. Open the Run dialog (Win+R) and launch the shell.
-	if cfg.Debug {
-		fmt.Fprintf(os.Stderr, "launching %s via Win+R ...\n", cfg.Shell)
+	// 2. Open and positively verify the Run dialog before typing. This avoids
+	// injecting launcher or command text into whichever application had focus.
+	runTemplate, err := loadDefaultRunDialogTemplate()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "cannot load embedded Run dialog template:", err)
+		os.Exit(2)
 	}
-	s.sendWinR(cfg.KeyDelay)
-	time.Sleep(cfg.StepDelay)
+	runDetected := false
+	for attempt := 0; attempt <= cfg.LaunchRetries; attempt++ {
+		if cfg.Debug {
+			fmt.Fprintf(os.Stderr, "opening Run dialog (attempt %d/%d) ...\n", attempt+1, cfg.LaunchRetries+1)
+		}
+		s.sendWinR(cfg.KeyDelay)
+		var onSample func(float64)
+		if cfg.Debug {
+			onSample = func(similarity float64) {
+				fmt.Fprintf(os.Stderr, "  Run dialog template similarity=%.0f%%\n", similarity*100)
+			}
+		}
+		if runDetected, _ = s.bmp.watchRunDialog(cfg.LaunchTimeout, runTemplate, onSample); runDetected {
+			if cfg.Debug {
+				saveShot(s, "shot_02_run_dialog_confirmed.png")
+			}
+			break
+		}
+		if cfg.Debug {
+			saveShot(s, fmt.Sprintf("shot_run_dialog_attempt_%d_failed.png", attempt+1))
+		}
+		s.sendEscape(cfg.KeyDelay)
+		time.Sleep(cfg.StepDelay)
+	}
+	if !runDetected {
+		fmt.Fprintf(os.Stderr, "Run dialog was not detected after %d attempt(s); command was not entered\n", cfg.LaunchRetries+1)
+		os.Exit(1)
+	}
 	if cfg.Debug {
-		saveShot(s, "shot_02_after_winr.png")
+		fmt.Fprintf(os.Stderr, "launching %s via verified Run dialog ...\n", cfg.Shell)
 	}
 
 	launcher := cfg.launcher()

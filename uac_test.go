@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"image"
 	"image/color"
 	"image/png"
@@ -126,6 +127,39 @@ func TestLoadDefaultUACTemplate(t *testing.T) {
 	}
 	if template.width != 456 || template.height != 310 {
 		t.Fatalf("embedded template size = %dx%d, want 456x310", template.width, template.height)
+	}
+}
+
+func TestRunDialogSimilarity(t *testing.T) {
+	template, err := loadDefaultRunDialogTemplate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if template.width != 431 || template.height != 208 {
+		t.Fatalf("embedded Run dialog size = %dx%d, want 431x208", template.width, template.height)
+	}
+	img, _, err := image.Decode(bytes.NewReader(defaultRunDialogTemplatePNG))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bmp := newBitmapAccumulator(1024, 768)
+	bmp.mu.Lock()
+	for y := 0; y < template.height; y++ {
+		for x := 0; x < template.width; x++ {
+			pixel := color.RGBAModel.Convert(img.At(x, y)).(color.RGBA)
+			off := ((509+y)*bmp.width + 15 + x) * 4
+			bmp.frame[off] = pixel.B
+			bmp.frame[off+1] = pixel.G
+			bmp.frame[off+2] = pixel.R
+			bmp.frame[off+3] = 0xFF
+		}
+	}
+	bmp.has = true
+	bmp.mu.Unlock()
+
+	similarity, ok := bmp.runDialogSimilarity(template)
+	if !ok || similarity < 0.99 {
+		t.Fatalf("Run dialog similarity = %.3f, want at least 0.99", similarity)
 	}
 }
 
