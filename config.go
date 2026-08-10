@@ -10,26 +10,27 @@ import (
 
 // Config holds parsed command-line options for rdpRun.
 type Config struct {
-	Server        string // host:port
-	User          string // login (DOMAIN\user or user)
-	Password      string
-	Command       string // shell command to execute on the remote machine
-	Shell         string // "cmd" or "powershell"
-	Capture       bool   // capture command output via clipboard
-	RawCmd        bool   // do not auto-wrap command in "| clip" / "| Set-Clipboard"
-	Timeout       time.Duration
-	Auth          string // "nla" | "standard" | "auto"
-	Width         int
-	Height        int
-	KeyDelay      time.Duration // delay between keypresses
-	StepDelay     time.Duration // delay between macro steps (Win+R, type, enter...)
-	UAC           bool          // auto-confirm UAC via Alt+Y
-	UACTimeout    time.Duration
-	UACTemplate   string
-	LaunchTimeout time.Duration
-	LaunchRetries int
-	Verbose       bool
-	Debug         bool // save diagnostic screenshots + extra state output
+	Server             string // host:port
+	User               string // login (DOMAIN\user or user)
+	Password           string
+	Command            string // shell command to execute on the remote machine
+	Shell              string // "cmd" or "powershell"
+	Capture            bool   // capture command output via clipboard
+	RawCmd             bool   // do not auto-wrap command in "| clip" / "| Set-Clipboard"
+	Timeout            time.Duration
+	Auth               string // "nla" | "standard" | "auto"
+	Width              int
+	Height             int
+	KeyDelay           time.Duration // delay between keypresses
+	StepDelay          time.Duration // delay between macro steps (Win+R, type, enter...)
+	UAC                bool          // auto-confirm UAC via Alt+Y
+	UACTimeout         time.Duration
+	UACTemplate        string
+	LaunchTimeout      time.Duration
+	LaunchRetries      int
+	RunDialogThreshold float64
+	Verbose            bool
+	Debug              bool // save diagnostic screenshots + extra state output
 }
 
 func parseArgs(args []string) (*Config, error) {
@@ -61,6 +62,7 @@ func parseArgs(args []string) (*Config, error) {
 	fs.StringVar(&cfg.UACTemplate, "uac-template", "", "override the embedded PNG reference for visual UAC matching")
 	fs.DurationVar(&cfg.LaunchTimeout, "launch-timeout", 3*time.Second, "how long to verify the Run dialog before retrying")
 	fs.IntVar(&cfg.LaunchRetries, "launch-retries", 2, "number of additional Run dialog launch attempts")
+	fs.Float64Var(&cfg.RunDialogThreshold, "run-dialog-threshold", 0.72, "Run dialog similarity threshold from 0 to 1")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "enable verbose RDP library logging")
 	fs.BoolVar(&cfg.Debug, "debug", false, "save diagnostic screenshots (shot_NN_*.png) and print extra state")
 
@@ -122,6 +124,9 @@ func (c *Config) validate() error {
 	if c.LaunchRetries < 0 {
 		return fmt.Errorf("--launch-retries must not be negative")
 	}
+	if c.RunDialogThreshold <= 0 || c.RunDialogThreshold > 1 {
+		return fmt.Errorf("--run-dialog-threshold must be greater than 0 and no greater than 1")
+	}
 	return nil
 }
 
@@ -178,21 +183,22 @@ func reorderFlags(args []string) []string {
 	var flags, positional []string
 	afterDoubleDash := false
 	flagsWithValues := map[string]bool{
-		"--server":         true,
-		"--user":           true,
-		"--pass":           true,
-		"--cmd":            true,
-		"--shell":          true,
-		"--timeout":        true,
-		"--auth":           true,
-		"--width":          true,
-		"--height":         true,
-		"--key-delay":      true,
-		"--step-delay":     true,
-		"--uac-timeout":    true,
-		"--uac-template":   true,
-		"--launch-timeout": true,
-		"--launch-retries": true,
+		"--server":               true,
+		"--user":                 true,
+		"--pass":                 true,
+		"--cmd":                  true,
+		"--shell":                true,
+		"--timeout":              true,
+		"--auth":                 true,
+		"--width":                true,
+		"--height":               true,
+		"--key-delay":            true,
+		"--step-delay":           true,
+		"--uac-timeout":          true,
+		"--uac-template":         true,
+		"--launch-timeout":       true,
+		"--launch-retries":       true,
+		"--run-dialog-threshold": true,
 	}
 	for index := 0; index < len(args); index++ {
 		a := args[index]

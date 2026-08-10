@@ -75,7 +75,7 @@ func main() {
 	runDetected := false
 	for attempt := 0; attempt <= cfg.LaunchRetries; attempt++ {
 		if cfg.Debug {
-			fmt.Fprintf(os.Stderr, "opening Run dialog (attempt %d/%d) ...\n", attempt+1, cfg.LaunchRetries+1)
+			fmt.Fprintf(os.Stderr, "opening Run dialog (attempt %d/%d, threshold=%.0f%%) ...\n", attempt+1, cfg.LaunchRetries+1, cfg.RunDialogThreshold*100)
 		}
 		s.sendWinR(cfg.KeyDelay)
 		var onSample func(float64)
@@ -84,7 +84,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "  Run dialog template similarity=%.0f%%\n", similarity*100)
 			}
 		}
-		if runDetected, _ = s.bmp.watchRunDialog(cfg.LaunchTimeout, runTemplate, onSample); runDetected {
+		if runDetected, _ = s.bmp.watchRunDialog(cfg.LaunchTimeout, runTemplate, cfg.RunDialogThreshold, onSample); runDetected {
 			if cfg.Debug {
 				saveShot(s, "shot_02_run_dialog_confirmed.png")
 			}

@@ -43,7 +43,6 @@ const (
 	uacTemplateWidth  = 32
 	uacTemplateHeight = 24
 	uacTemplateScore  = 0.72
-	runTemplateScore  = 0.78
 )
 
 type uacTemplate struct {
@@ -52,10 +51,10 @@ type uacTemplate struct {
 	height int
 }
 
-//go:embed uac-reference.png
+//go:embed assets/uac-reference.png
 var defaultUACTemplatePNG []byte
 
-//go:embed run-dialog-reference.png
+//go:embed assets/run-dialog-reference.png
 var defaultRunDialogTemplatePNG []byte
 
 func loadUACTemplate(path string) (*uacTemplate, error) {
@@ -413,7 +412,7 @@ func (b *bitmapAccumulator) watchUAC(timeout time.Duration, baseline frameStats,
 	}
 }
 
-func (b *bitmapAccumulator) watchRunDialog(timeout time.Duration, template *uacTemplate, onSample func(float64)) (bool, float64) {
+func (b *bitmapAccumulator) watchRunDialog(timeout time.Duration, template *uacTemplate, threshold float64, onSample func(float64)) (bool, float64) {
 	baseline, ok := b.stats()
 	if !ok {
 		return false, 0
@@ -435,7 +434,7 @@ func (b *bitmapAccumulator) watchRunDialog(timeout time.Duration, template *uacT
 			if onSample != nil {
 				onSample(similarity)
 			}
-			if matches && similarity >= runTemplateScore {
+			if matches && similarity >= threshold {
 				matchingFrames++
 			} else {
 				matchingFrames = 0

@@ -1,9 +1,9 @@
 # rdprun
 
 [![Downloads (Total)](https://img.shields.io/github/downloads/mitiya/rdpRun/total)](https://github.com/mitiya/rdpRun/releases)
-[![Downloads (v0.1.2)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.2/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.2)
-[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.2/rdprun.exe)
-[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.2/rdprun-linux-amd64)
+[![Downloads (v0.1.3)](https://img.shields.io/github/downloads/mitiya/rdpRun/v0.1.3/total)](https://github.com/mitiya/rdpRun/releases/tag/v0.1.3)
+[![rdprun.exe](https://img.shields.io/badge/rdprun.exe-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.3/rdprun.exe)
+[![rdprun-linux-amd64](https://img.shields.io/badge/rdprun--linux--amd64-download-blue)](https://github.com/mitiya/rdpRun/releases/download/v0.1.3/rdprun-linux-amd64)
 
 Run a command on a remote Windows host over RDP and optionally capture text output through the clipboard channel.
 
@@ -63,6 +63,7 @@ rdprun --server srv:3389 --user joe --pass pw --cmd "Get-Process" --shell powers
 - `--uac-template path.png` - override the embedded UAC screenshot reference. The comparison is structural and does not read UI text, so it is independent of the Windows language.
 - `--launch-timeout` - how long to wait for Run dialog verification on each launch attempt (default: `3s`)
 - `--launch-retries` - additional Run dialog launch attempts after the first (default: `2`). If all attempts fail, `rdprun` stops before entering the shell or command into an unknown window.
+- `--run-dialog-threshold` - lower-left Run dialog similarity threshold from `0` to `1` (default: `0.72`). Use `0.70` only when a known valid Run dialog scores below the default.
 - `--debug` - save diagnostic screenshots
 - `--verbose` - verbose protocol logs
 

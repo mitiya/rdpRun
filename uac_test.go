@@ -175,3 +175,29 @@ func TestReorderFlagsKeepsTemplatePath(t *testing.T) {
 		}
 	}
 }
+
+func TestRunDialogThreshold(t *testing.T) {
+	args := []string{"192.0.2.10:3389", "admin", "password", "whoami", "--run-dialog-threshold", "0.70"}
+	cfg, err := parseArgs(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RunDialogThreshold != 0.70 {
+		t.Fatalf("Run dialog threshold = %.2f, want 0.70", cfg.RunDialogThreshold)
+	}
+
+	defaultCfg, err := parseArgs([]string{"192.0.2.10:3389", "admin", "password", "whoami"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultCfg.RunDialogThreshold != 0.72 {
+		t.Fatalf("default Run dialog threshold = %.2f, want 0.72", defaultCfg.RunDialogThreshold)
+	}
+
+	for _, threshold := range []string{"0", "-0.1", "1.01"} {
+		_, err := parseArgs([]string{"192.0.2.10:3389", "admin", "password", "whoami", "--run-dialog-threshold", threshold})
+		if err == nil {
+			t.Fatalf("threshold %q was accepted", threshold)
+		}
+	}
+}
