@@ -26,9 +26,11 @@ type Config struct {
 	UAC                bool          // auto-confirm UAC via Alt+Y
 	UACTimeout         time.Duration
 	UACTemplate        string
+	DesktopTimeout     time.Duration // total time to wait for Windows shell readiness
 	LaunchTimeout      time.Duration
-	LaunchRetries      int
 	RunDialogThreshold float64
+	RunInputThreshold  int
+	MaxAttempts        int
 	Verbose            bool
 	Debug              bool // save diagnostic screenshots + extra state output
 }
@@ -60,9 +62,11 @@ func parseArgs(args []string) (*Config, error) {
 	fs.BoolVar(&cfg.UAC, "uac", true, "detect and confirm UAC/elevation prompts via Alt+Y")
 	fs.DurationVar(&cfg.UACTimeout, "uac-timeout", 5*time.Second, "how long to detect UAC before one fallback Alt+Y (set 0 to skip both)")
 	fs.StringVar(&cfg.UACTemplate, "uac-template", "", "override the embedded PNG reference for visual UAC matching")
-	fs.DurationVar(&cfg.LaunchTimeout, "launch-timeout", 3*time.Second, "how long to verify the Run dialog before retrying")
-	fs.IntVar(&cfg.LaunchRetries, "launch-retries", 2, "number of additional Run dialog launch attempts")
+	fs.DurationVar(&cfg.DesktopTimeout, "desktop-timeout", 120*time.Second, "total time to wait for Windows and the Run dialog to become ready")
+	fs.DurationVar(&cfg.LaunchTimeout, "launch-timeout", 3*time.Second, "how long to verify the Run dialog during one launch attempt")
 	fs.Float64Var(&cfg.RunDialogThreshold, "run-dialog-threshold", 0.72, "Run dialog similarity threshold from 0 to 1")
+	fs.IntVar(&cfg.RunInputThreshold, "run-input-threshold", 20, "min increase in dark (text) pixels in the Run edit box confirming the launcher was typed there (for 1024x768; scales with resolution)")
+	fs.IntVar(&cfg.MaxAttempts, "max-attempts", 6, "max Run dialog open+verify attempts before giving up (also bounded by --desktop-timeout)")
 	fs.BoolVar(&cfg.Verbose, "verbose", false, "enable verbose RDP library logging")
 	fs.BoolVar(&cfg.Debug, "debug", false, "save diagnostic screenshots (shot_NN_*.png) and print extra state")
 
@@ -121,11 +125,17 @@ func (c *Config) validate() error {
 	if c.LaunchTimeout <= 0 {
 		return fmt.Errorf("--launch-timeout must be greater than zero")
 	}
-	if c.LaunchRetries < 0 {
-		return fmt.Errorf("--launch-retries must not be negative")
+	if c.DesktopTimeout <= 0 {
+		return fmt.Errorf("--desktop-timeout must be greater than zero")
 	}
 	if c.RunDialogThreshold <= 0 || c.RunDialogThreshold > 1 {
 		return fmt.Errorf("--run-dialog-threshold must be greater than 0 and no greater than 1")
+	}
+	if c.RunInputThreshold <= 0 {
+		return fmt.Errorf("--run-input-threshold must be greater than zero")
+	}
+	if c.MaxAttempts <= 0 {
+		return fmt.Errorf("--max-attempts must be greater than zero")
 	}
 	return nil
 }
@@ -196,9 +206,11 @@ func reorderFlags(args []string) []string {
 		"--step-delay":           true,
 		"--uac-timeout":          true,
 		"--uac-template":         true,
+		"--desktop-timeout":      true,
 		"--launch-timeout":       true,
-		"--launch-retries":       true,
 		"--run-dialog-threshold": true,
+		"--run-input-threshold":  true,
+		"--max-attempts":         true,
 	}
 	for index := 0; index < len(args); index++ {
 		a := args[index]

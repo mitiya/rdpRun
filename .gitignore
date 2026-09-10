@@ -2,13 +2,16 @@
 rdprun
 rdprun.exe
 rdprun-linux-amd64
+rdprun-linux-amd64.md5
 
 # Debug screenshots
 shot_*.png
+[0-9][0-9][0-9]_shot_*.png
 
 # IDE
 .idea/
 .vscode/
+.claude/
 
 # OS files
 .DS_Store

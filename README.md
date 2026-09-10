@@ -15,7 +15,7 @@ Run a command on a remote Windows host over RDP and optionally capture text outp
 - Keyboard macro flow (Win+R -> launch shell -> run command)
 - Optional output capture via clipboard (`--capture`)
 - Visual UAC detection using an embedded, language-independent image reference and one `Alt+Y` fallback after the timeout
-- Verified shell launch: uses `Esc`, a best-effort `Win+D`, then checks for the embedded lower-left Run dialog before typing
+- Verified shell launch: uses `Esc`, a best-effort `Win+D`, then checks for the embedded lower-left Run dialog before typing, and confirms the launcher text actually appeared in the Run field before pressing Enter (retries `Win+R` if another auto-started window stole focus)
 - Cross-build for Windows and Linux (`CGO_ENABLED=0`)
 - Bundled local `third_party/grdp` copy patched for cgo-free builds
 
@@ -61,9 +61,11 @@ rdprun --server srv:3389 --user joe --pass pw --cmd "Get-Process" --shell powers
 - `--timeout` - capture timeout
 - `--uac` / `--uac-timeout` - detect a protected-desktop UAC dialog from RDP frames and send `Alt+Y`; if none is confirmed before the timeout, send one fallback `Alt+Y`. Set `--uac-timeout=0` to disable both detection and fallback.
 - `--uac-template path.png` - override the embedded UAC screenshot reference. The comparison is structural and does not read UI text, so it is independent of the Windows language.
-- `--launch-timeout` - how long to wait for Run dialog verification on each launch attempt (default: `3s`)
-- `--launch-retries` - additional Run dialog launch attempts after the first (default: `2`). If all attempts fail, `rdprun` stops before entering the shell or command into an unknown window.
+- `--desktop-timeout` - total time to wait for Windows to finish logon and for a verified Run dialog (default: `120s`). RDP protocol readiness does not guarantee that Explorer is ready to receive `Win+R`.
+- `--launch-timeout` - how long to verify the Run dialog during each `Win+R` attempt (default: `3s`). Attempts continue until the total desktop timeout expires.
 - `--run-dialog-threshold` - lower-left Run dialog similarity threshold from `0` to `1` (default: `0.72`). Use `0.70` only when a known valid Run dialog scores below the default.
+- `--run-input-threshold` - minimum increase in dark (text) pixels in the Run dialog's "Open" field that confirms the launcher was typed there (default: `20`, calibrated for `1024x768`; scales with resolution). The field is cleared with `Ctrl+A`+`Backspace` first (Windows pre-fills it with the last command, often selected), so the comparison starts from an empty field. If the field does not gain text (a window such as Server Manager or the Shutdown Event Tracker stole focus), the launch attempt is retried instead of sending the command to the wrong window.
+- `--max-attempts` - maximum number of Run dialog open+verify attempts before giving up (default: `6`). The launch loop is also bounded by `--desktop-timeout`, whichever comes first.
 - `--debug` - save diagnostic screenshots
 - `--verbose` - verbose protocol logs
 

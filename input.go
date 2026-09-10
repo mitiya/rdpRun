@@ -17,6 +17,8 @@ const (
 	scR         = 0x13 // 'R' (used with Win for the Win+R shell hotkey)
 	scReturn    = 0x1C // Enter
 	scLAlt      = 0x38 // Left Alt
+	scLCtrl     = 0x1D // Left Ctrl
+	scA         = 0x1E // 'A' (used with Ctrl to select-all before clearing)
 	scY         = 0x15 // 'Y' (used with Alt for the UAC Yes hotkey)
 	scEscape    = 0x01 // Esc
 	scBackspace = 0x0E // Backspace
@@ -54,6 +56,24 @@ func (s *rdpSession) sendAltY(keyDelay time.Duration) {
 	s.keyPress(scY, false, keyDelay)
 	s.keyUp(scLAlt, false)
 	time.Sleep(keyDelay)
+}
+
+// clearField empties a focused text field regardless of its selection or
+// caret state: Ctrl+A selects everything, then Backspace deletes it. The Run
+// dialog pre-fills with the last command (often already selected), so this
+// gives a known-empty baseline and avoids appending to that text.
+func (s *rdpSession) clearField(keyDelay time.Duration) {
+	s.keyDown(scLCtrl, false)
+	time.Sleep(keyDelay)
+	s.keyPress(scA, false, keyDelay)
+	s.keyUp(scLCtrl, false)
+	time.Sleep(keyDelay)
+	// One Backspace clears the whole selection when Ctrl+A took; the extra
+	// presses cover the fallback where select-all is ignored and the caret sits
+	// at the end of a pre-filled launcher name (longest is "powershell").
+	for i := 0; i < 12; i++ {
+		s.sendBackspace(keyDelay)
+	}
 }
 
 // sendEscape presses and releases Esc (to dismiss dialogs).

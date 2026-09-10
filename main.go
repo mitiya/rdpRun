@@ -72,10 +72,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "cannot load embedded Run dialog template:", err)
 		os.Exit(2)
 	}
-	runDetected := false
-	for attempt := 0; attempt <= cfg.LaunchRetries; attempt++ {
+	launcher := cfg.launcher()
+	launched := false
+	desktopDeadline := time.Now().Add(cfg.DesktopTimeout)
+	for attempt := 1; attempt <= cfg.MaxAttempts && time.Now().Before(desktopDeadline); attempt++ {
+		remaining := time.Until(desktopDeadline)
+		attemptTimeout := cfg.LaunchTimeout
+		if remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
 		if cfg.Debug {
-			fmt.Fprintf(os.Stderr, "opening Run dialog (attempt %d/%d, threshold=%.0f%%) ...\n", attempt+1, cfg.LaunchRetries+1, cfg.RunDialogThreshold*100)
+			fmt.Fprintf(os.Stderr, "opening Run dialog (attempt %d, remaining %s, threshold=%.0f%%) ...\n", attempt, remaining.Round(time.Second), cfg.RunDialogThreshold*100)
 		}
 		s.sendWinR(cfg.KeyDelay)
 		var onSample func(float64)
@@ -84,30 +91,56 @@ func main() {
 				fmt.Fprintf(os.Stderr, "  Run dialog template similarity=%.0f%%\n", similarity*100)
 			}
 		}
-		if runDetected, _ = s.bmp.watchRunDialog(cfg.LaunchTimeout, runTemplate, cfg.RunDialogThreshold, onSample); runDetected {
+		runDetected, _ := s.bmp.watchRunDialog(attemptTimeout, runTemplate, cfg.RunDialogThreshold, onSample)
+		if !runDetected {
 			if cfg.Debug {
-				saveShot(s, "shot_02_run_dialog_confirmed.png")
+				saveShot(s, fmt.Sprintf("shot_run_dialog_attempt_%d_failed.png", attempt))
 			}
-			break
+			s.sendEscape(cfg.KeyDelay)
+			sleepUntil(desktopDeadline, cfg.StepDelay)
+			continue
 		}
 		if cfg.Debug {
-			saveShot(s, fmt.Sprintf("shot_run_dialog_attempt_%d_failed.png", attempt+1))
+			saveShot(s, "shot_02_run_dialog_confirmed.png")
+			fmt.Fprintf(os.Stderr, "launching %s via verified Run dialog ...\n", cfg.Shell)
 		}
-		s.sendEscape(cfg.KeyDelay)
+
+		// Confirm the launcher text actually lands in the Run edit box before
+		// pressing Enter. Another auto-started window (Server Manager, the
+		// Shutdown Event Tracker) can steal focus while the Run dialog stays
+		// visible, so typing alone is not proof the keystrokes reached Run.
+		// Clear the field first: Run pre-fills with the last command (often
+		// selected), so the empty baseline makes the ink delta meaningful and
+		// stops us appending to pre-filled text. If focus was stolen the clear
+		// misses Run, its field stays unchanged, and the delta stays ~0.
+		s.clearField(cfg.KeyDelay)
 		time.Sleep(cfg.StepDelay)
+		before, haveBefore := s.bmp.runEditBoxInk()
+		s.typeString(launcher, cfg.KeyDelay)
+		time.Sleep(cfg.KeyDelay + cfg.StepDelay)
+		if cfg.Debug {
+			saveShot(s, "shot_02b_after_launcher_type.png")
+		}
+		after, haveAfter := s.bmp.runEditBoxInk()
+		landed := haveBefore && haveAfter && runInputLanded(before, after, cfg.RunInputThreshold)
+		if cfg.Debug {
+			fmt.Fprintf(os.Stderr, "  Run edit-box ink %d -> %d (delta=%d, threshold=%d) landed=%v\n", before, after, after-before, cfg.RunInputThreshold, landed)
+		}
+		if !landed {
+			// Keystrokes did not reach the Run field (focus was stolen). Esc
+			// clears any stray text / dismisses the intruding modal, then retry.
+			s.sendEscape(cfg.KeyDelay)
+			sleepUntil(desktopDeadline, cfg.StepDelay)
+			continue
+		}
+		s.sendEnter(cfg.KeyDelay)
+		launched = true
+		break
 	}
-	if !runDetected {
-		fmt.Fprintf(os.Stderr, "Run dialog was not detected after %d attempt(s); command was not entered\n", cfg.LaunchRetries+1)
+	if !launched {
+		fmt.Fprintf(os.Stderr, "Run dialog with confirmed input was not reached after %d attempts (within %s); command was not entered\n", cfg.MaxAttempts, cfg.DesktopTimeout)
 		os.Exit(1)
 	}
-	if cfg.Debug {
-		fmt.Fprintf(os.Stderr, "launching %s via verified Run dialog ...\n", cfg.Shell)
-	}
-
-	launcher := cfg.launcher()
-	s.typeString(launcher, cfg.KeyDelay)
-	time.Sleep(cfg.KeyDelay)
-	s.sendEnter(cfg.KeyDelay)
 	// PowerShell needs noticeably longer than cmd on a fresh Windows machine.
 	// If text starts while its startup profile/banner is still initializing, RDP
 	// Unicode events are accepted only after the prompt is ready and the leading
@@ -228,11 +261,29 @@ func main() {
 	fmt.Fprintln(os.Stderr, "done")
 }
 
+// sleepUntil pauses for step, but never past deadline (and not at all if the
+// deadline has passed), so retry backoff can't overrun the desktop timeout.
+func sleepUntil(deadline time.Time, step time.Duration) {
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return
+	}
+	if remaining < step {
+		step = remaining
+	}
+	time.Sleep(step)
+}
+
+// shotSeq numbers debug screenshots in the order they are saved.
+var shotSeq int
+
 // saveShot writes the current RDP frame buffer to a PNG and logs its mean
 // brightness, so we can correlate screenshots with screen state.
 func saveShot(s *rdpSession, name string) {
+	shotSeq++
+	fileName := fmt.Sprintf("%03d_%s", shotSeq, name)
 	br, ok := s.bmp.meanBrightness()
-	if err := s.bmp.savePNG(name); err != nil {
+	if err := s.bmp.savePNG(fileName); err != nil {
 		fmt.Fprintf(os.Stderr, "  [shot %s] save error: %v\n", name, err)
 		return
 	}

@@ -309,6 +309,66 @@ func (b *bitmapAccumulator) templateSimilarity(template *uacTemplate) (float64, 
 	return b.templateSimilarityNear(template, centerX, centerY, width, height, 6*max(1, b.width/128))
 }
 
+// Run edit-box ("Открыть:") glyph area, expressed as fractions of the Run
+// dialog reference box (431x208 anchored at 15,509 scaled from 1024x768, same
+// anchor as runDialogSimilarity). The launcher text ("cmd"/"powershell")
+// appears at the left of the combo box, so we cover that band.
+const (
+	runEditRelX0     = 0.22
+	runEditRelX1     = 0.60
+	runEditRelY0     = 0.50
+	runEditRelY1     = 0.64
+	runEditDarkLevel = 128 // luminance below this counts as text ink
+)
+
+// runEditBoxInk counts dark ("ink") pixels over the whole Run edit-box region.
+// The launcher is only a few thin glyphs on a near-white field, so we scan
+// every pixel: a sparse sample grid steps straight over the strokes and reads
+// pure white. Returns false if any pixel is unreceived (alpha 0) or the region
+// falls outside the frame.
+func (b *bitmapAccumulator) runEditBoxInk() (int, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.has {
+		return 0, false
+	}
+	dlgW := 431 * b.width / 1024
+	dlgH := 208 * b.height / 768
+	originX := 15 * b.width / 1024
+	originY := 509 * b.height / 768
+	x0 := originX + int(float64(dlgW)*runEditRelX0)
+	x1 := originX + int(float64(dlgW)*runEditRelX1)
+	y0 := originY + int(float64(dlgH)*runEditRelY0)
+	y1 := originY + int(float64(dlgH)*runEditRelY1)
+	if x0 < 0 || y0 < 0 || x1 > b.width || y1 > b.height || x1 <= x0 || y1 <= y0 {
+		return 0, false
+	}
+	ink := 0
+	for y := y0; y < y1; y++ {
+		for x := x0; x < x1; x++ {
+			off := (y*b.width + x) * 4
+			if off+3 >= len(b.frame) || b.frame[off+3] == 0 {
+				return 0, false
+			}
+			lum := (float64(b.frame[off]) + float64(b.frame[off+1]) + float64(b.frame[off+2])) / 3
+			if lum < runEditDarkLevel {
+				ink++
+			}
+		}
+	}
+	return ink, true
+}
+
+// runInputLanded reports whether the launcher text reached the Run edit box:
+// the dark-pixel (ink) count in the field rose by at least threshold after
+// typing. If another window stole focus, the field stays empty (or loses its
+// caret), so the count does not climb.
+// ponytail: ink-delta heuristic, tuned by --run-input-threshold; upgrade to
+// per-glyph matching only if a server defeats it.
+func runInputLanded(before, after, threshold int) bool {
+	return after-before >= threshold
+}
+
 func (b *bitmapAccumulator) runDialogSimilarity(template *uacTemplate) (float64, bool) {
 	if template == nil {
 		return 0, false
@@ -413,33 +473,29 @@ func (b *bitmapAccumulator) watchUAC(timeout time.Duration, baseline frameStats,
 }
 
 func (b *bitmapAccumulator) watchRunDialog(timeout time.Duration, template *uacTemplate, threshold float64, onSample func(float64)) (bool, float64) {
-	baseline, ok := b.stats()
-	if !ok {
-		return false, 0
-	}
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(150 * time.Millisecond)
 	defer ticker.Stop()
-	matchingFrames := 0
-	lastRevision := baseline.revision
+	// Evaluate the persistent composite on every tick, not only when a new
+	// bitmap revision arrives: once the Run dialog is drawn the screen often
+	// goes static (no further updates), so a revision-gated watcher would never
+	// see the match. runDialogSimilarity returns false for unreceived (alpha 0)
+	// pixels, so a mid-draw partial frame still can't confirm. Require two
+	// consecutive matching ticks (~300ms) to reject a transient.
+	matchingTicks := 0
 	for {
 		select {
 		case <-ticker.C:
-			current, ok := b.stats()
-			if !ok || current.revision == lastRevision {
-				continue
-			}
-			lastRevision = current.revision
 			similarity, matches := b.runDialogSimilarity(template)
 			if onSample != nil {
 				onSample(similarity)
 			}
 			if matches && similarity >= threshold {
-				matchingFrames++
+				matchingTicks++
 			} else {
-				matchingFrames = 0
+				matchingTicks = 0
 			}
-			if matchingFrames >= 2 {
+			if matchingTicks >= 2 {
 				return true, similarity
 			}
 		case <-time.After(time.Until(deadline)):
