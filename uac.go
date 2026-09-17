@@ -28,6 +28,16 @@ type bitmapAccumulator struct {
 	frame    []byte // top-down BGRX, width*height*4 (approximate composite)
 	has      bool
 	revision uint64
+
+	// runDlgOffsetX/Y is the pixel offset (from the assumed 15,509@1024x768
+	// anchor) where the Run dialog template last actually matched. The dialog
+	// doesn't always render at the exact assumed anchor (DPI/resolution
+	// variance on the remote host), and runDialogSimilarity searches a small
+	// window around it to compensate. runEditBoxInk must sample that same
+	// found position, not the unshifted anchor, or it reads background pixels
+	// next to the real edit box and never sees the typed text land.
+	runDlgOffsetX int
+	runDlgOffsetY int
 }
 
 type frameStats struct {
@@ -306,7 +316,8 @@ func (b *bitmapAccumulator) templateSimilarity(template *uacTemplate) (float64, 
 	height := template.height * b.height / 768
 	centerX := (b.width - width) / 2
 	centerY := (b.height - height) / 2
-	return b.templateSimilarityNear(template, centerX, centerY, width, height, 6*max(1, b.width/128))
+	similarity, _, _, found := b.templateSimilarityNear(template, centerX, centerY, width, height, 6*max(1, b.width/128))
+	return similarity, found
 }
 
 // Run edit-box ("Открыть:") glyph area, expressed as fractions of the Run
@@ -334,8 +345,8 @@ func (b *bitmapAccumulator) runEditBoxInk() (int, bool) {
 	}
 	dlgW := 431 * b.width / 1024
 	dlgH := 208 * b.height / 768
-	originX := 15 * b.width / 1024
-	originY := 509 * b.height / 768
+	originX := 15*b.width/1024 + b.runDlgOffsetX
+	originY := 509*b.height/768 + b.runDlgOffsetY
 	x0 := originX + int(float64(dlgW)*runEditRelX0)
 	x1 := originX + int(float64(dlgW)*runEditRelX1)
 	y0 := originY + int(float64(dlgH)*runEditRelY0)
@@ -382,26 +393,29 @@ func (b *bitmapAccumulator) runDialogSimilarity(template *uacTemplate) (float64,
 	height := template.height * b.height / 768
 	originX := 15 * b.width / 1024
 	originY := 509 * b.height / 768
-	return b.templateSimilarityNear(template, originX, originY, width, height, 4*max(1, b.width/128))
+	similarity, dx, dy, found := b.templateSimilarityNear(template, originX, originY, width, height, 4*max(1, b.width/128))
+	if found {
+		b.runDlgOffsetX, b.runDlgOffsetY = dx, dy
+	}
+	return similarity, found
 }
 
-func (b *bitmapAccumulator) templateSimilarityNear(template *uacTemplate, originX, originY, width, height, searchRange int) (float64, bool) {
+func (b *bitmapAccumulator) templateSimilarityNear(template *uacTemplate, originX, originY, width, height, searchRange int) (similarity float64, bestOffsetX, bestOffsetY int, found bool) {
 	if width <= 0 || height <= 0 || width > b.width || height > b.height {
-		return 0, false
+		return 0, 0, 0, false
 	}
 	searchStep := max(1, b.width/128)
-	bestSimilarity := 0.0
-	found := false
 	for offsetY := -searchRange; offsetY <= searchRange; offsetY += searchStep {
 		for offsetX := -searchRange; offsetX <= searchRange; offsetX += searchStep {
-			similarity, ok := b.templateSimilarityAt(template, originX+offsetX, originY+offsetY, width, height)
-			if ok && (!found || similarity > bestSimilarity) {
-				bestSimilarity = similarity
+			candidate, ok := b.templateSimilarityAt(template, originX+offsetX, originY+offsetY, width, height)
+			if ok && (!found || candidate > similarity) {
+				similarity = candidate
+				bestOffsetX, bestOffsetY = offsetX, offsetY
 				found = true
 			}
 		}
 	}
-	return bestSimilarity, found
+	return similarity, bestOffsetX, bestOffsetY, found
 }
 
 func (b *bitmapAccumulator) templateSimilarityAt(template *uacTemplate, originX, originY, width, height int) (float64, bool) {
